@@ -1,21 +1,38 @@
+# Python caches and local environments
+__pycache__/
+*.py[cod]
+*.pyc
+.venv/
+venv/
+.env
+
+# Generated ELM-detection and fitting outputs
+telm_*.npz
 *.npz
 *.npy
 *.pkl
 *.pickle
+elm_batch_summary.csv
+*_mapped_te_points.csv
+
+# Generated figures, plot folders, and analysis outputs
+elm_batch_plots/
+lorenzo_style_fit_plots_v13/
+output/
+results/
+plots/
+cache/
 *.png
 *.jpg
 *.pdf
+*.svg
 *.xlsx
 *.ods
 *.err
 *.log
 
-__pycache__/
-*.pyc
-
-output/
-results/
-plots/
-cache/
-
+# Local editor and OS files
+.DS_Store
+.idea/
+.vscode/
 .~lock*

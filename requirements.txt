@@ -1,0 +1,7 @@
+numpy>=1.23
+pandas>=1.5
+matplotlib>=3.6
+scipy>=1.9
+# pyuda is required for MAST-U data access. It is usually supplied by the
+# laboratory analysis environment and may not be available from public PyPI.
+pyuda

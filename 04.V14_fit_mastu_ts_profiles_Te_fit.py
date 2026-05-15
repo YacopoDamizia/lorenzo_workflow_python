@@ -36,10 +36,12 @@ warnings.simplefilter("ignore", OptimizeWarning)
 # =============================================================================
 # USER INPUTS
 # =============================================================================
+# Each dictionary describes one analysis case.  For normal use, copy one of the
+# examples, update the shot/time/ELM-fraction fields, and add it to `in_list`.
 in1 = {
-    "shot": 49107,
-    "tr": [0.60, 0.80],
-    "perc_elm": [0.80, 0.95],
+    "shot": 49107,          # MAST-U shot number.
+    "tr": [0.60, 0.80],     # Profile sample time range [s].
+    "perc_elm": [0.80, 0.95],  # Accepted fraction of each ELM cycle.
 
     # For HFS-only test: set r_shift_lfs = 0.0
     # For LFS-only test: set r_shift_hfs = 0.0
@@ -47,13 +49,13 @@ in1 = {
     "r_shift_lfs": 0.0005,
 #    "r_shift_hfs": 0.00,
 #    "r_shift_lfs": 0.000,
-    "te_sep": 0.05,
-    "neoff": 1,
-    "teoff": 0,
-    "rem_ne_peak": [0.0, 0.0],
-    "xpf": 0.8,
-    "ndeg": 5.0,
-    "equi": "EPM",
+    "te_sep": 0.05,        # Target separatrix Te used by the Te shift logic.
+    "neoff": 1,            # Density scrape-off-layer offset switch.
+    "teoff": 0,            # Temperature scrape-off-layer offset switch.
+    "rem_ne_peak": [0.0, 0.0],  # Optional psi_N interval to remove from ne fit.
+    "xpf": 0.8,            # Minimum psi_N included in edge fit clouds.
+    "ndeg": 5.0,           # Polynomial degree for the constrained core fit.
+    "equi": "EPM",        # Equilibrium tree prefix used for flux mapping.
 }
 
 in2 = {
@@ -98,12 +100,12 @@ in2 = {
 #}
 
 
-in_list = [in1]
+in_list = [in1]  # Add more dictionaries here for batch profile fitting.
 
-ELM_DIR = "."
-SAVE_OUTPUT = True
-OUTDIR = "."
-SAVE_PLOTS = False
+ELM_DIR = "."       # Directory containing telm_<shot>.npz files from step 03.
+SAVE_OUTPUT = True  # Save compressed .npz fit products and mapped-point CSVs.
+OUTDIR = "."        # Directory for numerical output files.
+SAVE_PLOTS = False  # Set True to save diagnostic figures for each case.
 PLOT_DIR = "lorenzo_style_fit_plots_v13"
 
 
@@ -133,6 +135,9 @@ TE_REFIT_AFTER_SHIFT = False   # IDL-like = False
 # BASIC HELPERS
 # =============================================================================
 def extract_time_and_data(d):
+    """
+    Return a pyuda signal as separate time, data, and dimension arrays without assuming one fixed signal layout.
+    """
     data = np.asarray(d.data)
     dims = getattr(d, "dims", None)
     if dims is None:
@@ -153,10 +158,16 @@ def extract_time_and_data(d):
 
 
 def get_uda(sig, shot):
+    """
+    Fetch one signal for one shot through the shared pyuda client.
+    """
     return client.get(sig, shot)
 
 
 def load_elm_npz(shot, elm_dir="."):
+    """
+    Load ELM timing data saved by the ELM detection scripts and convert scalar arrays to plain Python values.
+    """
     path = os.path.join(elm_dir, f"telm_{shot}.npz")
     if not os.path.exists(path):
         raise FileNotFoundError(f"ELM file not found: {path}")
@@ -175,6 +186,9 @@ def load_elm_npz(shot, elm_dir="."):
 
 
 def select_indices_in_elm_fraction(sample_times, telm, perc_elm):
+    """
+    Keep profile sample indices whose times fall inside the requested fraction of the surrounding ELM period.
+    """
     sample_times = np.asarray(sample_times).ravel()
     telm = np.asarray(telm).ravel()
 
@@ -194,6 +208,9 @@ def select_indices_in_elm_fraction(sample_times, telm, perc_elm):
 
 
 def reorder_ts_to_rt(data, time, r):
+    """
+    Normalize Thomson-scattering arrays to the repository convention of radius-by-time shape.
+    """
     data = np.asarray(data)
     time = np.asarray(time).ravel()
     r = np.asarray(r)
@@ -216,6 +233,9 @@ def reorder_ts_to_rt(data, time, r):
 
 
 def reorder_rz_to_rt(arr, time):
+    """
+    Normalize R or Z coordinate arrays to radius-by-time shape, adding a time axis when the coordinate is static.
+    """
     arr = np.asarray(arr)
     time = np.asarray(time).ravel()
 
@@ -240,6 +260,9 @@ def reorder_rz_to_rt(arr, time):
 # FIT FUNCTIONS
 # =============================================================================
 def mtanh(x, a0, a1, a2, a3, a4=0.0):
+    """
+    Evaluate the modified hyperbolic tangent edge-profile model used for pedestal fits.
+    """
     xx = (a0 - x) / (2.0 * a1)
     mt = ((1.0 + a3 * xx) * np.exp(xx) - np.exp(-xx)) / (np.exp(xx) + np.exp(-xx))
     edge = (a2 - a4) / 2.0 * (mt + 1.0) + a4
@@ -247,6 +270,9 @@ def mtanh(x, a0, a1, a2, a3, a4=0.0):
 
 
 def mtanh_off(x, a0, a1, a2, a3, a5):
+    """
+    Evaluate a non-negative modified hyperbolic tangent with an explicit scrape-off-layer offset.
+    """
     xx = (a0 - x) / (2.0 * a1)
     mt = ((1.0 + a3 * xx) * np.exp(xx) - np.exp(-xx)) / (np.exp(xx) + np.exp(-xx))
     edge = (a2 - a5) / 2.0 * (mt + 1.0) + a5
@@ -254,6 +280,9 @@ def mtanh_off(x, a0, a1, a2, a3, a5):
 
 
 def build_idl_style_te_sigma(y):
+    """
+    Build IDL-style Te fit uncertainties proportional to sqrt(Te) with safe clipping at zero.
+    """
     y = np.asarray(y, dtype=float).ravel()
     return np.sqrt(np.clip(y, 1e-8, None))
 
@@ -266,6 +295,9 @@ def fit_mtanh_profile(
     quantity="Te",
     use_bounds=True,
 ):
+    """
+    Fit the generic modified-tanh pedestal model to finite profile points.
+    """
     x = np.asarray(x).ravel()
     y = np.asarray(y).ravel()
 
@@ -377,6 +409,9 @@ def fit_mtanh_profile_te_idl_style(x, y, use_offset=False):
 
 
 def eval_fit_on_grid(fitres, xgrid):
+    """
+    Evaluate a fitted mtanh result on a caller-supplied psi_N grid.
+    """
     popt = fitres["popt"]
     if fitres["use_offset"]:
         return mtanh_off(xgrid, *popt)
@@ -384,6 +419,9 @@ def eval_fit_on_grid(fitres, xgrid):
 
 
 def extract_pedestal_params(fitres, xgrid):
+    """
+    Derive pedestal height, width, position, and maximum gradient from a fitted profile on a dense grid.
+    """
     popt = fitres["popt"]
     pos = popt[0]
     width = 4.0 * popt[1]
@@ -411,6 +449,9 @@ def extract_pedestal_params(fitres, xgrid):
 # CORE POLYNOMIAL FITS
 # =============================================================================
 def fit_poly_with_constraints(x, y, x0, y0, dy0, degree=5, yerr=None):
+    """
+    Fit a polynomial core profile while forcing its value and slope to match the pedestal fit at a join point.
+    """
     x = np.asarray(x).ravel()
     y = np.asarray(y).ravel()
 
@@ -474,6 +515,9 @@ def fit_poly_with_constraints(x, y, x0, y0, dy0, degree=5, yerr=None):
 
 
 def eval_poly_core_fit(fitres, xgrid):
+    """
+    Evaluate a constrained polynomial fit result on a grid.
+    """
     return np.polyval(fitres["coeff"], xgrid)
 
 
@@ -481,6 +525,9 @@ def eval_poly_core_fit(fitres, xgrid):
 # ESSIVE FIT
 # =============================================================================
 def profile_fit_essive_py(x, p):
+    """
+    Evaluate the ESSIVE-style edge-plus-core profile model.
+    """
     x = np.asarray(x, dtype=float)
     p = np.asarray(p, dtype=float)
 
@@ -505,6 +552,9 @@ def profile_fit_essive_py(x, p):
 
 
 def fit_profile_fit_essive(x, y, yerr, p0):
+    """
+    Fit the ESSIVE-style profile model using bounded weighted nonlinear least squares.
+    """
     x = np.asarray(x, dtype=float)
     y = np.asarray(y, dtype=float)
     yerr = np.asarray(yerr, dtype=float)
@@ -538,6 +588,9 @@ def fit_profile_fit_essive(x, y, yerr, p0):
 # EQUILIBRIUM / PSI_N
 # =============================================================================
 def _coord_to_fractional_index(grid, x):
+    """
+    Convert physical grid coordinates to fractional array indices for scipy.ndimage interpolation.
+    """
     grid = np.asarray(grid, dtype=float).ravel()
     x = np.asarray(x, dtype=float)
 
@@ -549,6 +602,9 @@ def _coord_to_fractional_index(grid, x):
 
 
 def _map_psin_3d_points(r_pts, z_pts, t_pts, fluxdb, method="idl_like_best_effort"):
+    """
+    Map R, Z, and time points onto normalized poloidal flux using the selected interpolation method.
+    """
     r_pts = np.asarray(r_pts, dtype=float).ravel()
     z_pts = np.asarray(z_pts, dtype=float).ravel()
     t_pts = np.asarray(t_pts, dtype=float).ravel()
@@ -593,6 +649,9 @@ def _map_psin_3d_points(r_pts, z_pts, t_pts, fluxdb, method="idl_like_best_effor
 
 
 def load_flux_grid(shot, equilibrium="EPM"):
+    """
+    Load equilibrium flux data and construct a normalized psi_N cube with aligned R, Z, and time axes.
+    """
     prefix = equilibrium.lower()
 
     flux_sig = f"/{prefix}/output/profiles2D/poloidalFlux"
@@ -698,6 +757,9 @@ def load_flux_grid(shot, equilibrium="EPM"):
 
 
 def psin_at_time_from_grid_old_2d(r_pts, z_pts, t0, fluxdb):
+    """
+    Evaluate psi_N at one time using the older 2D interpolation path retained for comparison.
+    """
     t_flux = fluxdb["t_flux"]
     polflux = fluxdb["polflux"]
     r_grid = fluxdb["r_grid"]
@@ -736,6 +798,9 @@ def map_profile_to_psin_3d(
     mapping_method="idl_like_best_effort",
     fluxdb=None,
 ):
+    """
+    Map one profile slice from R/Z/time coordinates to psi_N using the 3D equilibrium grid.
+    """
     if fluxdb is None:
         fluxdb = load_flux_grid(shot, equilibrium=equilibrium)
 
@@ -772,6 +837,9 @@ def map_profile_to_psin_old_pointwise_z(
     equilibrium="EPM",
     fluxdb=None,
 ):
+    """
+    Map one profile slice with the older pointwise-Z method retained for IDL comparison studies.
+    """
     if fluxdb is None:
         fluxdb = load_flux_grid(shot, equilibrium=equilibrium)
 
@@ -796,28 +864,9 @@ def map_ts_to_psin(
     mapping_method="idl_like_best_effort",
     fluxdb=None,
 ):
-    return map_profile_to_psin_3d(
-        shot,
-        r_rt,
-        z_rt,
-        t_sel,
-        equilibrium=equilibrium,
-        use_idl_mean_z=use_idl_mean_z,
-        mapping_method=mapping_method,
-        fluxdb=fluxdb,
-    )
-
-
-def map_ti_to_psin(
-    shot,
-    r_rt,
-    z_rt,
-    t_sel,
-    equilibrium="EPM",
-    use_idl_mean_z=True,
-    mapping_method="idl_like_best_effort",
-    fluxdb=None,
-):
+    """
+    Map Thomson-scattering channel coordinates for selected time indices onto psi_N.
+    """
     return map_profile_to_psin_3d(
         shot,
         r_rt,
@@ -831,6 +880,9 @@ def map_ti_to_psin(
 
 
 def build_mapping_debug(ts_time_sel, psin_old_2d, psin_new_3d, debug_time_index=0):
+    """
+    Collect the raw mapped coordinate arrays needed to inspect and tune the equilibrium mapping.
+    """
     nt = psin_new_3d.shape[1]
     if nt == 0:
         return {
@@ -865,6 +917,9 @@ def build_mapping_debug(ts_time_sel, psin_old_2d, psin_new_3d, debug_time_index=
 # TS LOADING
 # =============================================================================
 def load_ts_data(shot, r_shift_hfs=0.0, r_shift_lfs=0.0):
+    """
+    Load Thomson-scattering density, temperature, uncertainty, and coordinate signals for one shot.
+    """
     xr = get_uda("/ayc/r", shot)
     xz = get_uda("/ayc/z", shot)
     xte = get_uda("/ayc/T_e", shot)
@@ -924,123 +979,10 @@ def load_ts_data(shot, r_shift_hfs=0.0, r_shift_lfs=0.0):
     }
 
 
-# =============================================================================
-# CX / Ti LOADING
-# =============================================================================
-def fit_weighted_poly(x, y, yerr=None, deg=2):
-    x = np.asarray(x).ravel()
-    y = np.asarray(y).ravel()
-
-    m = np.isfinite(x) & np.isfinite(y)
-    if yerr is not None:
-        yerr = np.asarray(yerr).ravel()
-        m &= np.isfinite(yerr) & (yerr > 0)
-
-    x = x[m]
-    y = y[m]
-    if yerr is not None:
-        yerr = yerr[m]
-
-    if len(x) < max(4, deg + 2):
-        raise RuntimeError(f"Not enough points for Ti polynomial fit: {len(x)}")
-
-    s = np.argsort(x)
-    x = x[s]
-    y = y[s]
-    if yerr is not None:
-        yerr = yerr[s]
-
-    deg_use = int(min(deg, max(1, len(x) - 2)))
-
-    if yerr is not None:
-        w = 1.0 / np.maximum(yerr, 1e-8)
-        coeff = np.polyfit(x, y, deg_use, w=w)
-    else:
-        coeff = np.polyfit(x, y, deg_use)
-
-    return {
-        "x": x,
-        "y": y,
-        "yerr": yerr,
-        "coeff": coeff,
-        "deg": deg_use,
-    }
-
-
-def eval_poly_fit(fitres, xgrid):
-    return np.polyval(fitres["coeff"], xgrid)
-
-
-def load_cx_ti_data(shot):
-    z_sig = "/ACT/CEL3/SS/Z"
-    ti_sig = "/ACT/CEL3/SS/PVB/C5291/TEMPERATURE"
-    dti_sig = "/ACT/CEL3/SS/PVB/C5291/TEMPERATURE_ERROR"
-
-    dum2 = get_uda(ti_sig, shot)
-    t_ti, ti_data, ti_dims = extract_time_and_data(dum2)
-
-    if t_ti is None:
-        raise RuntimeError("CX temperature has no time axis")
-
-    t_ti = np.asarray(t_ti).ravel()
-    ti_data = np.asarray(ti_data)
-
-    dum3 = get_uda(dti_sig, shot)
-    _, dti_data, _ = extract_time_and_data(dum3)
-    dti_data = np.asarray(dti_data)
-
-    xi = None
-    if hasattr(dum2, "x"):
-        try:
-            xi = np.asarray(dum2.x).ravel()
-        except Exception:
-            xi = None
-
-    if xi is None and len(ti_dims) > 0 and ti_dims[0] is not None:
-        xi = np.asarray(ti_dims[0]).ravel()
-
-    if xi is None:
-        raise RuntimeError("Could not recover xi from CX temperature object")
-
-    ti_rt = reorder_ts_to_rt(ti_data, t_ti, xi) / 1e3
-    dti_rt = reorder_ts_to_rt(dti_data, t_ti, xi) / 1e3
-
-    nch = ti_rt.shape[0]
-    if xi.size != nch:
-        if xi.size > nch:
-            xi = xi[:nch]
-        else:
-            raise RuntimeError(f"xi length {xi.size} does not match Ti channels {nch}")
-
-    zi_scalar = 0.01
-    try:
-        dum1 = get_uda(z_sig, shot)
-        _, zi_data, _ = extract_time_and_data(dum1)
-        zi_arr = np.asarray(zi_data).ravel()
-        zi_arr = zi_arr[np.isfinite(zi_arr)]
-        if zi_arr.size > 0:
-            zi_scalar = float(np.nanmean(zi_arr))
-    except Exception:
-        pass
-
-    r_rt = np.repeat(xi[:, None], len(t_ti), axis=1)
-    z_rt = np.full((nch, len(t_ti)), zi_scalar, dtype=float)
-
-    return {
-        "time": t_ti,
-        "r": r_rt,
-        "z": z_rt,
-        "ti": ti_rt,
-        "dti": dti_rt,
-        "xi": xi,
-        "zi_scalar": zi_scalar,
-    }
-
-
-# =============================================================================
-# EXTRA SELECTION HELPERS
-# =============================================================================
 def apply_rem_ne_peak(psin_flat, ne_flat, ene_flat, rem_ne_peak):
+    """
+    Remove density points from a configured psi_N interval before fitting, matching the legacy workflow option.
+    """
     rem_ne_peak = np.asarray(rem_ne_peak, dtype=float).ravel()
     if rem_ne_peak.size != 2:
         return psin_flat, ne_flat, ene_flat
@@ -1063,6 +1005,9 @@ def apply_rem_ne_peak(psin_flat, ne_flat, ene_flat, rem_ne_peak):
 # SHIFT DIAGNOSTICS
 # =============================================================================
 def compute_side_shift_diagnostics(r_unshifted_2d, r_shifted_2d):
+    """
+    Report HFS/LFS psi_N diagnostics after applying side-specific radial shifts.
+    """
     ru = np.asarray(r_unshifted_2d).ravel()
     rs = np.asarray(r_shifted_2d).ravel()
 
@@ -1099,6 +1044,9 @@ def compute_side_shift_diagnostics(r_unshifted_2d, r_shifted_2d):
 # MAIN CASE RUNNER
 # =============================================================================
 def run_lorenzo_style_case(case_dict, elm_dir="."):
+    """
+    Run the full Lorenzo-style workflow for one case: load data, select ELM phase, map profiles, fit, plot, and package results.
+    """
     shot = int(case_dict["shot"])
     tr = tuple(case_dict["tr"])
     perc_elm = tuple(case_dict["perc_elm"])
@@ -1367,99 +1315,6 @@ def run_lorenzo_style_case(case_dict, elm_dir="."):
     fitt_essive, _ = fit_profile_fit_essive(xfit_full, tefit_full, eyyin_te, p0_te_essive)
     tefit_essive = profile_fit_essive_py(xfit_full, fitt_essive)
 
-    # -------------------------------------------------------------------------
-    # Ti
-    # -------------------------------------------------------------------------
-    ti_status = "missing"
-    ti_sel = np.array([])
-    dti_sel = np.array([])
-    psin_ti_sel = np.array([])
-    ti_fit = None
-    ti_yfit = np.full_like(xfit_full, np.nan)
-    ti_deg = np.nan
-    ti_time_sel = np.array([])
-
-    psin_ti_raw_2d = np.array([])
-    psin_ti_shifted_2d = np.array([])
-    psin_ti_sel_raw = np.array([])
-    psin_ti_old_method_raw_2d = np.array([])
-
-    try:
-        cx = load_cx_ti_data(shot)
-        ti_time = cx["time"]
-
-        i_tr_ti = np.where((ti_time >= tr[0]) & (ti_time <= tr[1]))[0]
-        tti = ti_time[i_tr_ti]
-        ti_rt = cx["ti"][:, i_tr_ti]
-        dti_rt = cx["dti"][:, i_tr_ti]
-        r_ti = cx["r"][:, i_tr_ti]
-        z_ti = cx["z"][:, i_tr_ti]
-
-        i_elm_ti = select_indices_in_elm_fraction(tti, telm, perc_elm)
-        if len(i_elm_ti) == 0:
-            raise RuntimeError("No CX Ti time points survived ELM-cycle + absolute-time selection")
-
-        ti_time_sel = tti[i_elm_ti]
-        ti_rt = ti_rt[:, i_elm_ti]
-        dti_rt = dti_rt[:, i_elm_ti]
-        r_ti = r_ti[:, i_elm_ti]
-        z_ti = z_ti[:, i_elm_ti]
-
-        psin_ti_raw_2d, _ = map_ti_to_psin(
-            shot,
-            r_ti,
-            z_ti,
-            ti_time_sel,
-            equilibrium=equi,
-            use_idl_mean_z=USE_IDL_MEAN_Z,
-            mapping_method=MAPPING_METHOD,
-            fluxdb=fluxdb,
-        )
-        psin_ti_shifted_2d = psin_ti_raw_2d + psi_shift
-
-        psin_ti_old_method_raw_2d, _ = map_profile_to_psin_old_pointwise_z(
-            shot,
-            r_ti,
-            z_ti,
-            ti_time_sel,
-            equilibrium=equi,
-            fluxdb=fluxdb,
-        )
-
-        ti_sel = ti_rt.ravel()
-        dti_sel = dti_rt.ravel()
-        psin_ti_sel_raw = psin_ti_raw_2d.ravel()
-        psin_ti_sel = psin_ti_shifted_2d.ravel()
-
-        mti = np.isfinite(ti_sel) & np.isfinite(psin_ti_sel)
-        if np.any(np.isfinite(dti_sel)):
-            mti &= np.isfinite(dti_sel) & (dti_sel > 0)
-
-        ti_sel = ti_sel[mti]
-        dti_sel = dti_sel[mti]
-        psin_ti_sel_raw = psin_ti_sel_raw[mti]
-        psin_ti_sel = psin_ti_sel[mti]
-
-        print("Ti selected times:", ti_time_sel)
-        print("Ti min/max [keV]:", np.nanmin(ti_sel), np.nanmax(ti_sel))
-        print("Ti raw psin min/max:", np.nanmin(psin_ti_sel_raw), np.nanmax(psin_ti_sel_raw))
-        print("Ti shifted psin min/max:", np.nanmin(psin_ti_sel), np.nanmax(psin_ti_sel))
-        print("Number of Ti points:", len(ti_sel))
-
-        ti_fit = fit_weighted_poly(
-            psin_ti_sel,
-            ti_sel,
-            yerr=dti_sel if len(dti_sel) else None,
-            deg=min(5, int(max(1, round(ndeg)))),
-        )
-        ti_yfit = eval_poly_fit(ti_fit, xfit_full)
-        ti_deg = ti_fit["deg"]
-        ti_status = "ok"
-
-    except Exception as err:
-        ti_status = f"fallback: {err}"
-        ti_fit = None
-        ti_yfit = np.full_like(xfit_full, np.nan)
 
     return {
         "shot": shot,
@@ -1531,19 +1386,6 @@ def run_lorenzo_style_case(case_dict, elm_dir="."):
         "fitt_essive": fitt_essive,
         "fitn_essive": fitn_essive,
 
-        "ti_status": ti_status,
-        "ti_time_sel": ti_time_sel,
-        "ti_fit_x": ti_fit["x"] if ti_fit is not None else np.array([]),
-        "ti_fit_y": ti_fit["y"] if ti_fit is not None else np.array([]),
-        "ti_fit_coeff": ti_fit["coeff"] if ti_fit is not None else np.array([]),
-        "ti_fit_deg": ti_deg,
-        "ti_yfit": ti_yfit,
-        "psin_ti_old_method_raw_2d": psin_ti_old_method_raw_2d,
-        "psin_ti_raw_2d": psin_ti_raw_2d,
-        "psin_ti_shifted_2d": psin_ti_shifted_2d,
-        "psin_ti_sel_raw": psin_ti_sel_raw,
-        "psin_ti_sel": psin_ti_sel,
-
         "mapping_debug": mapping_debug,
 
         "fluxdb_meta": {
@@ -1558,6 +1400,9 @@ def run_lorenzo_style_case(case_dict, elm_dir="."):
 # PLOTTING
 # =============================================================================
 def plot_lorenzo_style_result_v13(out):
+    """
+    Create the two-panel Te/ne diagnostic figure for one fitted case.
+    """
     def _split_hfs_lfs(psin2d, r2d, y2d):
         ps = np.asarray(psin2d).ravel()
         rr = np.asarray(r2d).ravel()
@@ -1602,11 +1447,7 @@ def plot_lorenzo_style_result_v13(out):
     (psi_te_hfs, te_hfs), (psi_te_lfs, te_lfs) = _split_hfs_lfs(psi2d, r2d, te2d)
     (psi_ne_hfs, ne_hfs), (psi_ne_lfs, ne_lfs) = _split_hfs_lfs(psi2d, r2d, ne2d)
 
-    ti_x = np.asarray(out.get("ti_fit_x", []))
-    ti_y = np.asarray(out.get("ti_fit_y", []))
-    tifit = np.asarray(out.get("ti_yfit", np.full_like(xfit, np.nan)))
-
-    fig, axes = plt.subplots(1, 3, figsize=(18, 5), sharex=False)
+    fig, axes = plt.subplots(1, 2, figsize=(13, 5), sharex=False)
     fig.patch.set_facecolor("white")
 
     for ax in axes:
@@ -1623,8 +1464,6 @@ def plot_lorenzo_style_result_v13(out):
     red = "red"
     black = "black"
     green = "green"
-    blue = "dodgerblue"
-    cyan_dark = "deepskyblue"
 
     title_suffix = "raw" if PLOT_RAW_MAPPING else "shifted"
 
@@ -1647,9 +1486,6 @@ def plot_lorenzo_style_result_v13(out):
 
     ax.plot([1.0], [tesep_val], marker="o", markersize=10, markerfacecolor="none", markeredgecolor=red)
     ax.plot([1.0], [tesep_val], marker="o", markersize=6, color=black, label="Separatrix point")
-
-    if np.size(tifit) == np.size(xfit) and np.any(np.isfinite(tifit)):
-        ax.plot(xfit, tifit, color=cyan_dark, linewidth=1.5)
 
     ax.set_xlabel(r"$\psi_N$", fontsize=16)
     ax.set_ylabel(r"$T_e$ (keV)", fontsize=16)
@@ -1678,29 +1514,14 @@ def plot_lorenzo_style_result_v13(out):
     ax.set_ylabel(r"$n_e$  $10^{19}$  $(m^{-3})$", fontsize=16)
     ax.legend(fontsize=9, loc="best")
 
-    # Ti
-    ax = axes[2]
-    ax.set_xlim(*xr)
-    ax.set_ylim(*yrt)
-
-    ax.axvline(1.0, color="k", linestyle="--", linewidth=1)
-
-    if len(ti_x) > 0:
-        ax.plot(ti_x, ti_y, linestyle="None", marker="s", markersize=5, color=blue, label="CX Ti points")
-
-    if np.size(tifit) == np.size(xfit) and np.any(np.isfinite(tifit)):
-        ax.plot(xfit, tifit, color=black, linewidth=3, label="Ti fit")
-        ax.plot(xfit, tifit, color=red, linewidth=1)
-
-    ax.set_xlabel(r"$\psi_N$", fontsize=16)
-    ax.set_ylabel(r"$T_i$ (keV)", fontsize=16)
-    ax.legend(fontsize=9, loc="best")
-
     plt.tight_layout()
     return fig, axes
 
 
 def save_python_mapped_te_points_csv(out, outdir="."):
+    """
+    Export mapped Te points to CSV so the fit input cloud can be inspected outside Python.
+    """
     import pandas as pd
 
     os.makedirs(outdir, exist_ok=True)
@@ -1759,6 +1580,9 @@ def save_python_mapped_te_points_csv(out, outdir="."):
 # SAVE / SUMMARY
 # =============================================================================
 def save_lorenzo_style_output_v13(out, outdir="."):
+    """
+    Save all headline fit outputs and selected intermediate arrays to a compressed npz file.
+    """
     os.makedirs(outdir, exist_ok=True)
     path = os.path.join(outdir, f"TS_fit_lorenzo_style_v13_{out['shot']} .npz".replace(" ", ""))
 
@@ -1816,19 +1640,6 @@ def save_lorenzo_style_output_v13(out, outdir="."):
         fitt_essive=out["fitt_essive"],
         fitn_essive=out["fitn_essive"],
 
-        ti_status=out["ti_status"],
-        ti_time_sel=out["ti_time_sel"],
-        ti_fit_x=out["ti_fit_x"],
-        ti_fit_y=out["ti_fit_y"],
-        ti_fit_coeff=out["ti_fit_coeff"],
-        ti_fit_deg=out["ti_fit_deg"],
-        ti_yfit=out["ti_yfit"],
-        psin_ti_old_method_raw_2d=out["psin_ti_old_method_raw_2d"],
-        psin_ti_raw_2d=out["psin_ti_raw_2d"],
-        psin_ti_shifted_2d=out["psin_ti_shifted_2d"],
-        psin_ti_sel_raw=out["psin_ti_sel_raw"],
-        psin_ti_sel=out["psin_ti_sel"],
-
         mapping_debug_time_s=out["mapping_debug"]["time_s"],
         mapping_debug_time_index=out["mapping_debug"]["debug_time_index"],
         mapping_debug_old_psin_slice=out["mapping_debug"]["old_psin_slice"],
@@ -1851,6 +1662,9 @@ def save_lorenzo_style_output_v13(out, outdir="."):
 
 
 def build_summary_row_v13(out):
+    """
+    Build one row of scalar summary metrics for the v13 profile-fit batch output.
+    """
     return {
         "shot": out["shot"],
         "tr0": float(out["tr"][0]),
@@ -1883,8 +1697,6 @@ def build_summary_row_v13(out):
         "mapping_debug_mean_abs_diff": float(out["mapping_debug"]["mean_abs_diff"]),
         "shift_diag_hfs_mean_dR": float(out["shift_diag"]["hfs"]["mean_dR"]),
         "shift_diag_lfs_mean_dR": float(out["shift_diag"]["lfs"]["mean_dR"]),
-        "ti_status": out["ti_status"],
-        "ti_fit_deg": out["ti_fit_deg"],
         "status": "ok",
         "error_message": "",
     }
@@ -1970,11 +1782,6 @@ if __name__ == "__main__":
             print("\nDERIVED")
             print(f"  pne - pTe              = {out['ne_ped']['ped_pos'] - out['te_ped']['ped_pos']:.6f} psi_N")
             print(f"  ne_sep / neped         = {np.interp(1.0, out['xfit_full'], out['nefit_full']) / out['ne_ped']['ped_height']:.6f}")
-
-            print("\nTi")
-            print(f"  Ti status              = {out['ti_status']}")
-            if "ti_yfit" in out and np.any(np.isfinite(out["ti_yfit"])):
-                print(f"  Ti(psi_N=1)            = {np.interp(1.0, out['xfit_full'], out['ti_yfit']):.6f} keV")
 
             fig, _ = plot_lorenzo_style_result_v13(out)
 
