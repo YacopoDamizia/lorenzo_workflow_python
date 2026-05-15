@@ -33,6 +33,8 @@ client = Client()
 # =============================================================================
 # USER SETTINGS
 # =============================================================================
+# Edit this block for routine batch processing.  The detector functions are kept
+# below the settings so they can still be imported and reused programmatically.
 SHOTS = [
     49107,
      52600,
@@ -59,13 +61,14 @@ SHOTS = [
 
 
 
-SIGNAL = "/XIM/DA/HM10/T"
+SIGNAL = "/XIM/DA/HM10/T"  # D-alpha signal used as the ELM monitor.
 
-# Same window/settings for all shots
-TSEL = (0.2, 0.9)
-THR = 0.01
-SMOOTH_PTS = 1000
-MIN_GAP_S = 0.002
+# Same window/settings for all shots.  If one shot needs different thresholds,
+# run it separately or extend SHOTS to contain per-shot configuration objects.
+TSEL = (0.2, 0.9)       # Time window [s] used for thresholding.
+THR = 0.01              # Residual D-alpha threshold.
+SMOOTH_PTS = 1000       # Moving-average background window length in samples.
+MIN_GAP_S = 0.002       # Minimum gap [s] between separate ELM bursts.
 EVENT_MODE = "max"   # "first", "max", "last"
 
 # Saving
@@ -209,7 +212,11 @@ def detect_elm_mastu(
     event_mode="max",
 ):
     """
-    Python reproduction of calc_elm_mastu.pro
+    Detect ELM event times for one shot inside the batch workflow.
+
+    The implementation follows the single-shot detector and returns the same
+    intermediate arrays, which makes failed or surprising shots easy to inspect
+    without rerunning a different script.
     """
     d = client.get(signal, shot)
     t, da = extract_time_and_data(d)
@@ -231,6 +238,8 @@ def detect_elm_mastu(
     t = t[order]
     da = da[order]
 
+    # Estimate the slowly varying D-alpha background and subtract it so ELMs are
+    # identified as fast positive residuals.
     smda = moving_average_same(da, smooth_pts)
     das = da - smda
 
@@ -414,6 +423,9 @@ def save_elm_times_for_fit(res, outdir="."):
 
 
 def build_summary_row(res):
+    """
+    Build one compact dictionary of headline ELM metrics for the batch summary table.
+    """
     telm = np.asarray(res["telm"])
     if len(telm) >= 2:
         dt_elm = np.diff(telm)
@@ -459,6 +471,9 @@ def run_elm_batch(
     save_plots=False,
     plot_dir="elm_batch_plots",
 ):
+    """
+    Run ELM detection for every shot in the configured list and optionally save outputs and plots.
+    """
     rows = []
 
     if save_plots:
