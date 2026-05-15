@@ -47,7 +47,10 @@ You need access to the MAST-U UDA signals used by the scripts, including:
 - `/XIM/DA/HM10/T` for D-alpha ELM detection.
 - Thomson-scattering density, temperature, uncertainty, and coordinate signals used inside `load_ts_data`.
 - Equilibrium flux signals under the selected equilibrium tree, such as `EPM`.
-- Optional charge-exchange ion-temperature signals if using the Ti loading path.
+
+The current fitting workflow intentionally focuses on Thomson-scattering
+electron temperature and density only; ion-temperature analysis is disabled for
+now to keep the output plots and saved products simpler.
 
 ## Quick start
 

@@ -879,31 +879,6 @@ def map_ts_to_psin(
     )
 
 
-def map_ti_to_psin(
-    shot,
-    r_rt,
-    z_rt,
-    t_sel,
-    equilibrium="EPM",
-    use_idl_mean_z=True,
-    mapping_method="idl_like_best_effort",
-    fluxdb=None,
-):
-    """
-    Map charge-exchange ion-temperature coordinates for selected time indices onto psi_N.
-    """
-    return map_profile_to_psin_3d(
-        shot,
-        r_rt,
-        z_rt,
-        t_sel,
-        equilibrium=equilibrium,
-        use_idl_mean_z=use_idl_mean_z,
-        mapping_method=mapping_method,
-        fluxdb=fluxdb,
-    )
-
-
 def build_mapping_debug(ts_time_sel, psin_old_2d, psin_new_3d, debug_time_index=0):
     """
     Collect the raw mapped coordinate arrays needed to inspect and tune the equilibrium mapping.
@@ -1004,131 +979,6 @@ def load_ts_data(shot, r_shift_hfs=0.0, r_shift_lfs=0.0):
     }
 
 
-# =============================================================================
-# CX / Ti LOADING
-# =============================================================================
-def fit_weighted_poly(x, y, yerr=None, deg=2):
-    """
-    Fit a weighted polynomial to finite points and return coefficients in numpy.polyval order.
-    """
-    x = np.asarray(x).ravel()
-    y = np.asarray(y).ravel()
-
-    m = np.isfinite(x) & np.isfinite(y)
-    if yerr is not None:
-        yerr = np.asarray(yerr).ravel()
-        m &= np.isfinite(yerr) & (yerr > 0)
-
-    x = x[m]
-    y = y[m]
-    if yerr is not None:
-        yerr = yerr[m]
-
-    if len(x) < max(4, deg + 2):
-        raise RuntimeError(f"Not enough points for Ti polynomial fit: {len(x)}")
-
-    s = np.argsort(x)
-    x = x[s]
-    y = y[s]
-    if yerr is not None:
-        yerr = yerr[s]
-
-    deg_use = int(min(deg, max(1, len(x) - 2)))
-
-    if yerr is not None:
-        w = 1.0 / np.maximum(yerr, 1e-8)
-        coeff = np.polyfit(x, y, deg_use, w=w)
-    else:
-        coeff = np.polyfit(x, y, deg_use)
-
-    return {
-        "x": x,
-        "y": y,
-        "yerr": yerr,
-        "coeff": coeff,
-        "deg": deg_use,
-    }
-
-
-def eval_poly_fit(fitres, xgrid):
-    """
-    Evaluate a polynomial fit dictionary returned by fit_weighted_poly.
-    """
-    return np.polyval(fitres["coeff"], xgrid)
-
-
-def load_cx_ti_data(shot):
-    """
-    Load charge-exchange ion-temperature data and return it in a consistent dictionary format.
-    """
-    z_sig = "/ACT/CEL3/SS/Z"
-    ti_sig = "/ACT/CEL3/SS/PVB/C5291/TEMPERATURE"
-    dti_sig = "/ACT/CEL3/SS/PVB/C5291/TEMPERATURE_ERROR"
-
-    dum2 = get_uda(ti_sig, shot)
-    t_ti, ti_data, ti_dims = extract_time_and_data(dum2)
-
-    if t_ti is None:
-        raise RuntimeError("CX temperature has no time axis")
-
-    t_ti = np.asarray(t_ti).ravel()
-    ti_data = np.asarray(ti_data)
-
-    dum3 = get_uda(dti_sig, shot)
-    _, dti_data, _ = extract_time_and_data(dum3)
-    dti_data = np.asarray(dti_data)
-
-    xi = None
-    if hasattr(dum2, "x"):
-        try:
-            xi = np.asarray(dum2.x).ravel()
-        except Exception:
-            xi = None
-
-    if xi is None and len(ti_dims) > 0 and ti_dims[0] is not None:
-        xi = np.asarray(ti_dims[0]).ravel()
-
-    if xi is None:
-        raise RuntimeError("Could not recover xi from CX temperature object")
-
-    ti_rt = reorder_ts_to_rt(ti_data, t_ti, xi) / 1e3
-    dti_rt = reorder_ts_to_rt(dti_data, t_ti, xi) / 1e3
-
-    nch = ti_rt.shape[0]
-    if xi.size != nch:
-        if xi.size > nch:
-            xi = xi[:nch]
-        else:
-            raise RuntimeError(f"xi length {xi.size} does not match Ti channels {nch}")
-
-    zi_scalar = 0.01
-    try:
-        dum1 = get_uda(z_sig, shot)
-        _, zi_data, _ = extract_time_and_data(dum1)
-        zi_arr = np.asarray(zi_data).ravel()
-        zi_arr = zi_arr[np.isfinite(zi_arr)]
-        if zi_arr.size > 0:
-            zi_scalar = float(np.nanmean(zi_arr))
-    except Exception:
-        pass
-
-    r_rt = np.repeat(xi[:, None], len(t_ti), axis=1)
-    z_rt = np.full((nch, len(t_ti)), zi_scalar, dtype=float)
-
-    return {
-        "time": t_ti,
-        "r": r_rt,
-        "z": z_rt,
-        "ti": ti_rt,
-        "dti": dti_rt,
-        "xi": xi,
-        "zi_scalar": zi_scalar,
-    }
-
-
-# =============================================================================
-# EXTRA SELECTION HELPERS
-# =============================================================================
 def apply_rem_ne_peak(psin_flat, ne_flat, ene_flat, rem_ne_peak):
     """
     Remove density points from a configured psi_N interval before fitting, matching the legacy workflow option.
@@ -1465,99 +1315,6 @@ def run_lorenzo_style_case(case_dict, elm_dir="."):
     fitt_essive, _ = fit_profile_fit_essive(xfit_full, tefit_full, eyyin_te, p0_te_essive)
     tefit_essive = profile_fit_essive_py(xfit_full, fitt_essive)
 
-    # -------------------------------------------------------------------------
-    # Ti
-    # -------------------------------------------------------------------------
-    ti_status = "missing"
-    ti_sel = np.array([])
-    dti_sel = np.array([])
-    psin_ti_sel = np.array([])
-    ti_fit = None
-    ti_yfit = np.full_like(xfit_full, np.nan)
-    ti_deg = np.nan
-    ti_time_sel = np.array([])
-
-    psin_ti_raw_2d = np.array([])
-    psin_ti_shifted_2d = np.array([])
-    psin_ti_sel_raw = np.array([])
-    psin_ti_old_method_raw_2d = np.array([])
-
-    try:
-        cx = load_cx_ti_data(shot)
-        ti_time = cx["time"]
-
-        i_tr_ti = np.where((ti_time >= tr[0]) & (ti_time <= tr[1]))[0]
-        tti = ti_time[i_tr_ti]
-        ti_rt = cx["ti"][:, i_tr_ti]
-        dti_rt = cx["dti"][:, i_tr_ti]
-        r_ti = cx["r"][:, i_tr_ti]
-        z_ti = cx["z"][:, i_tr_ti]
-
-        i_elm_ti = select_indices_in_elm_fraction(tti, telm, perc_elm)
-        if len(i_elm_ti) == 0:
-            raise RuntimeError("No CX Ti time points survived ELM-cycle + absolute-time selection")
-
-        ti_time_sel = tti[i_elm_ti]
-        ti_rt = ti_rt[:, i_elm_ti]
-        dti_rt = dti_rt[:, i_elm_ti]
-        r_ti = r_ti[:, i_elm_ti]
-        z_ti = z_ti[:, i_elm_ti]
-
-        psin_ti_raw_2d, _ = map_ti_to_psin(
-            shot,
-            r_ti,
-            z_ti,
-            ti_time_sel,
-            equilibrium=equi,
-            use_idl_mean_z=USE_IDL_MEAN_Z,
-            mapping_method=MAPPING_METHOD,
-            fluxdb=fluxdb,
-        )
-        psin_ti_shifted_2d = psin_ti_raw_2d + psi_shift
-
-        psin_ti_old_method_raw_2d, _ = map_profile_to_psin_old_pointwise_z(
-            shot,
-            r_ti,
-            z_ti,
-            ti_time_sel,
-            equilibrium=equi,
-            fluxdb=fluxdb,
-        )
-
-        ti_sel = ti_rt.ravel()
-        dti_sel = dti_rt.ravel()
-        psin_ti_sel_raw = psin_ti_raw_2d.ravel()
-        psin_ti_sel = psin_ti_shifted_2d.ravel()
-
-        mti = np.isfinite(ti_sel) & np.isfinite(psin_ti_sel)
-        if np.any(np.isfinite(dti_sel)):
-            mti &= np.isfinite(dti_sel) & (dti_sel > 0)
-
-        ti_sel = ti_sel[mti]
-        dti_sel = dti_sel[mti]
-        psin_ti_sel_raw = psin_ti_sel_raw[mti]
-        psin_ti_sel = psin_ti_sel[mti]
-
-        print("Ti selected times:", ti_time_sel)
-        print("Ti min/max [keV]:", np.nanmin(ti_sel), np.nanmax(ti_sel))
-        print("Ti raw psin min/max:", np.nanmin(psin_ti_sel_raw), np.nanmax(psin_ti_sel_raw))
-        print("Ti shifted psin min/max:", np.nanmin(psin_ti_sel), np.nanmax(psin_ti_sel))
-        print("Number of Ti points:", len(ti_sel))
-
-        ti_fit = fit_weighted_poly(
-            psin_ti_sel,
-            ti_sel,
-            yerr=dti_sel if len(dti_sel) else None,
-            deg=min(5, int(max(1, round(ndeg)))),
-        )
-        ti_yfit = eval_poly_fit(ti_fit, xfit_full)
-        ti_deg = ti_fit["deg"]
-        ti_status = "ok"
-
-    except Exception as err:
-        ti_status = f"fallback: {err}"
-        ti_fit = None
-        ti_yfit = np.full_like(xfit_full, np.nan)
 
     return {
         "shot": shot,
@@ -1629,19 +1386,6 @@ def run_lorenzo_style_case(case_dict, elm_dir="."):
         "fitt_essive": fitt_essive,
         "fitn_essive": fitn_essive,
 
-        "ti_status": ti_status,
-        "ti_time_sel": ti_time_sel,
-        "ti_fit_x": ti_fit["x"] if ti_fit is not None else np.array([]),
-        "ti_fit_y": ti_fit["y"] if ti_fit is not None else np.array([]),
-        "ti_fit_coeff": ti_fit["coeff"] if ti_fit is not None else np.array([]),
-        "ti_fit_deg": ti_deg,
-        "ti_yfit": ti_yfit,
-        "psin_ti_old_method_raw_2d": psin_ti_old_method_raw_2d,
-        "psin_ti_raw_2d": psin_ti_raw_2d,
-        "psin_ti_shifted_2d": psin_ti_shifted_2d,
-        "psin_ti_sel_raw": psin_ti_sel_raw,
-        "psin_ti_sel": psin_ti_sel,
-
         "mapping_debug": mapping_debug,
 
         "fluxdb_meta": {
@@ -1657,7 +1401,7 @@ def run_lorenzo_style_case(case_dict, elm_dir="."):
 # =============================================================================
 def plot_lorenzo_style_result_v13(out):
     """
-    Create the multi-panel diagnostic figure for one fitted case.
+    Create the two-panel Te/ne diagnostic figure for one fitted case.
     """
     def _split_hfs_lfs(psin2d, r2d, y2d):
         ps = np.asarray(psin2d).ravel()
@@ -1703,11 +1447,7 @@ def plot_lorenzo_style_result_v13(out):
     (psi_te_hfs, te_hfs), (psi_te_lfs, te_lfs) = _split_hfs_lfs(psi2d, r2d, te2d)
     (psi_ne_hfs, ne_hfs), (psi_ne_lfs, ne_lfs) = _split_hfs_lfs(psi2d, r2d, ne2d)
 
-    ti_x = np.asarray(out.get("ti_fit_x", []))
-    ti_y = np.asarray(out.get("ti_fit_y", []))
-    tifit = np.asarray(out.get("ti_yfit", np.full_like(xfit, np.nan)))
-
-    fig, axes = plt.subplots(1, 3, figsize=(18, 5), sharex=False)
+    fig, axes = plt.subplots(1, 2, figsize=(13, 5), sharex=False)
     fig.patch.set_facecolor("white")
 
     for ax in axes:
@@ -1724,8 +1464,6 @@ def plot_lorenzo_style_result_v13(out):
     red = "red"
     black = "black"
     green = "green"
-    blue = "dodgerblue"
-    cyan_dark = "deepskyblue"
 
     title_suffix = "raw" if PLOT_RAW_MAPPING else "shifted"
 
@@ -1748,9 +1486,6 @@ def plot_lorenzo_style_result_v13(out):
 
     ax.plot([1.0], [tesep_val], marker="o", markersize=10, markerfacecolor="none", markeredgecolor=red)
     ax.plot([1.0], [tesep_val], marker="o", markersize=6, color=black, label="Separatrix point")
-
-    if np.size(tifit) == np.size(xfit) and np.any(np.isfinite(tifit)):
-        ax.plot(xfit, tifit, color=cyan_dark, linewidth=1.5)
 
     ax.set_xlabel(r"$\psi_N$", fontsize=16)
     ax.set_ylabel(r"$T_e$ (keV)", fontsize=16)
@@ -1777,24 +1512,6 @@ def plot_lorenzo_style_result_v13(out):
 
     ax.set_xlabel(r"$\psi_N$", fontsize=16)
     ax.set_ylabel(r"$n_e$  $10^{19}$  $(m^{-3})$", fontsize=16)
-    ax.legend(fontsize=9, loc="best")
-
-    # Ti
-    ax = axes[2]
-    ax.set_xlim(*xr)
-    ax.set_ylim(*yrt)
-
-    ax.axvline(1.0, color="k", linestyle="--", linewidth=1)
-
-    if len(ti_x) > 0:
-        ax.plot(ti_x, ti_y, linestyle="None", marker="s", markersize=5, color=blue, label="CX Ti points")
-
-    if np.size(tifit) == np.size(xfit) and np.any(np.isfinite(tifit)):
-        ax.plot(xfit, tifit, color=black, linewidth=3, label="Ti fit")
-        ax.plot(xfit, tifit, color=red, linewidth=1)
-
-    ax.set_xlabel(r"$\psi_N$", fontsize=16)
-    ax.set_ylabel(r"$T_i$ (keV)", fontsize=16)
     ax.legend(fontsize=9, loc="best")
 
     plt.tight_layout()
@@ -1923,19 +1640,6 @@ def save_lorenzo_style_output_v13(out, outdir="."):
         fitt_essive=out["fitt_essive"],
         fitn_essive=out["fitn_essive"],
 
-        ti_status=out["ti_status"],
-        ti_time_sel=out["ti_time_sel"],
-        ti_fit_x=out["ti_fit_x"],
-        ti_fit_y=out["ti_fit_y"],
-        ti_fit_coeff=out["ti_fit_coeff"],
-        ti_fit_deg=out["ti_fit_deg"],
-        ti_yfit=out["ti_yfit"],
-        psin_ti_old_method_raw_2d=out["psin_ti_old_method_raw_2d"],
-        psin_ti_raw_2d=out["psin_ti_raw_2d"],
-        psin_ti_shifted_2d=out["psin_ti_shifted_2d"],
-        psin_ti_sel_raw=out["psin_ti_sel_raw"],
-        psin_ti_sel=out["psin_ti_sel"],
-
         mapping_debug_time_s=out["mapping_debug"]["time_s"],
         mapping_debug_time_index=out["mapping_debug"]["debug_time_index"],
         mapping_debug_old_psin_slice=out["mapping_debug"]["old_psin_slice"],
@@ -1993,8 +1697,6 @@ def build_summary_row_v13(out):
         "mapping_debug_mean_abs_diff": float(out["mapping_debug"]["mean_abs_diff"]),
         "shift_diag_hfs_mean_dR": float(out["shift_diag"]["hfs"]["mean_dR"]),
         "shift_diag_lfs_mean_dR": float(out["shift_diag"]["lfs"]["mean_dR"]),
-        "ti_status": out["ti_status"],
-        "ti_fit_deg": out["ti_fit_deg"],
         "status": "ok",
         "error_message": "",
     }
@@ -2080,11 +1782,6 @@ if __name__ == "__main__":
             print("\nDERIVED")
             print(f"  pne - pTe              = {out['ne_ped']['ped_pos'] - out['te_ped']['ped_pos']:.6f} psi_N")
             print(f"  ne_sep / neped         = {np.interp(1.0, out['xfit_full'], out['nefit_full']) / out['ne_ped']['ped_height']:.6f}")
-
-            print("\nTi")
-            print(f"  Ti status              = {out['ti_status']}")
-            if "ti_yfit" in out and np.any(np.isfinite(out["ti_yfit"])):
-                print(f"  Ti(psi_N=1)            = {np.interp(1.0, out['xfit_full'], out['ti_yfit']):.6f} keV")
 
             fig, _ = plot_lorenzo_style_result_v13(out)
 
