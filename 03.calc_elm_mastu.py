@@ -31,13 +31,16 @@ client = Client()
 # =============================================================================
 # USER SETTINGS
 # =============================================================================
+# Edit only this block for normal single-shot use.  The functions below are
+# deliberately written so that they can also be imported by notebooks or other
+# scripts without changing the scientific settings hidden inside the code.
 SHOT = 49107
 
 SIGNAL = "/XIM/DA/HM10/T"
-TSEL = (0.2, 0.9)       # IDL default
-THR = 0.011            # IDL default
-SMOOTH_PTS = 1000       # IDL default
-MIN_GAP_S = 0.002       # IDL default
+TSEL = (0.2, 0.9)       # Time window [s] used for thresholding (IDL default).
+THR = 0.011             # Residual D-alpha threshold after background removal.
+SMOOTH_PTS = 1000       # Moving-average window length in samples (IDL default).
+MIN_GAP_S = 0.002       # Time gap [s] that separates two ELM bursts.
 
 # Event time choice:
 # "first" = first threshold crossing in each burst
@@ -45,8 +48,8 @@ MIN_GAP_S = 0.002       # IDL default
 # "last"  = last threshold crossing in each burst
 EVENT_MODE = "max"
 
-SAVE_ELM_TIMES = True
-OUTDIR = "."
+SAVE_ELM_TIMES = True   # Save telm_<shot>.npz for the pedestal-fit workflow.
+OUTDIR = "."            # Output directory for the saved .npz file.
 
 
 # =============================================================================
@@ -177,7 +180,13 @@ def detect_elm_mastu(
     event_mode="max",
 ):
     """
-    Python reproduction of calc_elm_mastu.pro
+    Detect ELM event times from one D-alpha signal.
+
+    The algorithm mirrors the original IDL workflow: load the signal, estimate a
+    slowly varying background with a moving average, threshold the residual in a
+    selected time window, and collapse each threshold-crossing burst to one event
+    time.  The returned dictionary intentionally includes intermediate arrays so
+    users can plot and debug every step of the calculation.
     """
     d = client.get(signal, shot)
     t, da = extract_time_and_data(d)
@@ -199,6 +208,8 @@ def detect_elm_mastu(
     t = t[order]
     da = da[order]
 
+    # `smda` is the slow background estimate.  `das` is the fast residual where
+    # ELM spikes should stand above the threshold.
     smda = moving_average_same(da, smooth_pts)
     das = da - smda
 
@@ -208,6 +219,8 @@ def detect_elm_mastu(
     smdad = smda[mt]
     dasd = das[mt]
 
+    # Threshold only the selected time window so early/late transients do not
+    # influence the ELM list used by the pedestal analysis.
     mabove = dasd >= thr
     t_above = td[mabove]
     y_above = dasd[mabove]
